@@ -1,0 +1,126 @@
+name: build
+
+on:
+  push:
+    tags: ['*.*.*']
+env:
+  CARGO_TERM_COLOR: always
+  PROTOC_VERSION: 3.23.4
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v1
+
+    - name: Install protoc
+      uses: taiki-e/install-action@v2
+      with:
+        tool: protoc@${{ env.PROTOC_VERSION }}
+
+    - name: Install minimal stable
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+
+    - name: Run tests
+      run: cargo test --verbose
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get -y install gcc-mingw-w64-x86-64 gcc-mingw-w64-i686
+        rustup target add x86_64-pc-windows-gnu
+        rustup target add i686-pc-windows-gnu
+        rustup target add x86_64-unknown-linux-gnu
+        rustup target add x86_64-apple-darwin
+        mkdir dist
+        mkdir builds
+    - name: Build Linux
+      run: |
+        cargo build --release --all-features --target=x86_64-unknown-linux-gnu
+        cp target/x86_64-unknown-linux-gnu/release/megaphone-operator builds/megaphone-operator-linux
+        tar -C builds -czvf dist/megaphone-operator-linux.tar.gz megaphone-operator-linux
+    - name: Upload release
+      uses: softprops/action-gh-release@v1
+      with:
+        # body_path: CHANGELOG.md # TBD
+        files: |
+          dist/megaphone-operator-linux.tar.gz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Publish cargo package
+      env:
+        CARGO_ACCESS_TOKEN: ${{ secrets.CARGO_ACCESS_TOKEN }}
+      run: |
+        cargo login "$CARGO_ACCESS_TOKEN"
+        cargo publish
+  push_to_registry:
+    name: Push Megaphone image to Docker Hub
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@f4ef78c080cd8ba55a85445d5b36e214a81df20a
+        with:
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: dghila/megaphone
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
+        with:
+          context: .
+          file: ./docker/megaphone-be.dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  push_operator_to_registry:
+    name: Push Megaphone operator image to Docker Hub
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@f4ef78c080cd8ba55a85445d5b36e214a81df20a
+        with:
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: dghila/megaphone-operator
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
+        with:
+          context: .
+          file: ./docker/megaphone-operator.dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
